@@ -1,0 +1,323 @@
+
+step 1:- Database must be in Archivelog mode
+
+SQL> select log_mode from v$database;
+
+LOG_MODE
+------------
+ARCHIVELOG
+
+
+step 2:- Enable force logging
+
+alter database force logging;
+
+SQL> select force_logging from v$database;
+
+FOR
+---
+YES
+
+step 3:- Check total number of  group and thread for redolog files
+
+select  GROUP#, THREAD#,BYTES/1024/1024 as "size" from v$log;
+   GROUP#    THREAD#       size
+---------- ---------- ----------
+         1          1         50
+         2          1         50
+         3          2         50
+         4          2         50
+
+		 
+ col member for a50
+ set linesize 300	 
+select GROUP#, STATUS, type, member from v$logfile;
+
+       GROUP# STATUS  TYPE    MEMBER
+---------- ------- ------- --------------------------------------------------
+         2         ONLINE  +REDO01/mppbsdb/onlinelog/group_2.275.852562319
+         2         ONLINE  +REDO02/mppbsdb/onlinelog/group_2.275.852562319
+         1         ONLINE  +REDO01/mppbsdb/onlinelog/group_1.274.852562319
+         1         ONLINE  +REDO02/mppbsdb/onlinelog/group_1.274.852562319
+         3         ONLINE  +REDO01/mppbsdb/onlinelog/group_3.272.852562317
+         3         ONLINE  +REDO02/mppbsdb/onlinelog/group_3.272.852562317
+         4         ONLINE  +REDO01/mppbsdb/onlinelog/group_4.273.852562317
+         4         ONLINE  +REDO02/mppbsdb/onlinelog/group_4.273.852562317
+
+Note:- for creating standby redolog file:- 		 
+standby log file:- (number of member in thread+1)* maximun number of thread
+		 (4+1)*2=10
+
+alter database add standby logfile  group 7 '+FRA' size 50M;
+alter database add standby logfile  group 8 '+FRA' size 50M;
+alter database add standby logfile  group 9 '+FRA' size 50M;
+alter database add standby logfile  group 10 '+FRA' size 50M;
+alter database add standby logfile  group 11 '+FRA' size 50M;
+alter database add standby logfile  group 12 '+FRA' size 50M;
+alter database add standby logfile  group 13 '+FRA' size 50M;
+alter database add standby logfile  group 14 '+FRA' size 50M;
+alter database add standby logfile  group 15 '+FRA' size 50M;
+alter database add standby logfile  group 16 '+FRA' size 50M;
+		 
+		 
+select group#, member from v$logfile where type='STANDBY';
+
+
+    GROUP# MEMBER
+---------- --------------------------------------------------
+         7 +FRA/mppwsdb/onlinelog/group_7.10052.854902329
+         8 +FRA/mppwsdb/onlinelog/group_8.10057.854902339
+         9 +FRA/mppwsdb/onlinelog/group_9.10055.854902339
+        10 +FRA/mppwsdb/onlinelog/group_10.10073.854902339
+        11 +FRA/mppwsdb/onlinelog/group_11.10059.854902339
+        12 +FRA/mppwsdb/onlinelog/group_12.10069.854902339
+        13 +FRA/mppwsdb/onlinelog/group_13.10101.854902339
+        14 +FRA/mppwsdb/onlinelog/group_14.10076.854902341
+        15 +FRA/mppwsdb/onlinelog/group_15.10097.854902341
+        16 +FRA/mppwsdb/onlinelog/group_16.10122.854902341
+
+	================changes in parameter file for DC=================	
+
+step 4:- change the parameter on DC side.
+
+DC-- primary database:- 
+
+ALTER SYSTEM SET LOG_ARCHIVE_CONFIG='DG_CONFIG=(MPPBSDB,MPPBSDR)' cope=both sid='*';
+
+
+SQL> ALTER SYSTEM SET LOG_ARCHIVE_CONFIG='DG_CONFIG=(MPPBSDB,MPPBSDR)' scope=both sid='*';
+
+System altered.
+
+SQL> show parameter LOG_ARCHIVE_CONFIG
+
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+log_archive_config                   string      DG_CONFIG=(MPPWSDB,MPPWSDR)
+
+
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_2='SERVICE=MPPBSDR LGWR ASYNC VALID_FOR=(ONLINE_LOGFILES,PRIMARY_ROLE) DB_UNIQUE_NAME=MPPBSDR';
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_STATE_2=DEFER scope=both sid='*'; 
+
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_STATE_2=ENABLE scope=both sid='*';
+
+-- after setup of DR , then enable it
+
+
+SQL> show parameter LOG_ARCHIVE_DEST_2
+
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+log_archive_dest_2                   string      SERVICE=MPPWSDR LGWR ASYNC VAL
+                                                 ID_FOR=(ONLINE_LOGFILES,PRIMAR
+                                                 Y_ROLE) DB_UNIQUE_NAME=MPPWSDR
+												 
+												 
+ALTER SYSTEM SET LOG_ARCHIVE_FORMAT='%t_%s_%r.arc' SCOPE=SPFILE;
+ALTER SYSTEM SET REMOTE_LOGIN_PASSWORDFILE=EXCLUSIVE SCOPE=SPFILE;
+
+
+ALTER SYSTEM SET FAL_SERVER=MPPBSDR scope=both sid='*';
+--ALTER SYSTEM SET DB_FILE_NAME_CONVERT='DB11G_STBY','DB11G' SCOPE=SPFILE;
+--ALTER SYSTEM SET LOG_FILE_NAME_CONVERT='DB11G_STBY','DB11G'  SCOPE=SPFILE;
+ALTER SYSTEM SET STANDBY_FILE_MANAGEMENT=AUTO scope=both sid='*';
+
+
+step 5 :- create pfile on production database.( we'll use this pfile on DR side)
+
+	create pfile='/home/oracle/init<dbname>.ora from spfile;
+
+step 5:- Edit pfile with DR information.
+
+*.DB_UNIQUE_NAME=’MPPWSDR’
+#*.db_file_name_convert=’+DATA/STANDBYCRM/’,’+DATA/PRODCRM/’,’+RECO/STANDBYCRM/’,’+FRA/PRODCRM/’
+*.log_archive_config=’dg_config=(MPPWSDB,MPPWSDR)’
+*.log_archive_dest_1='LOCATION=+FRA valid_for=(ALL_LOGFILES,ALL_ROLES) db_unique_name=MPPBSDR'
+*.log_archive_dest_2='SERVICE=MPPBSDB LGWR ASYNC VALID_FOR=(ONLINE_LOGFILES,PRIMARY_ROLE) DB_UNIQUE_NAME=MPPBSDB'
+*.LOG_ARCHIVE_DEST_STATE_1=’ENABLE’
+*.LOG_ARCHIVE_DEST_STATE_2=’DEFER’
+*.LOG_ARCHIVE_FORMAT=’log%t_%s_%r.arc’
+#*.log_file_name_convert=’+DATA/STANDBYCRM/’,’+DATA/PRODCRM/’,’+FRA/STANDBYCRM/’,’+FRA/PRODCRM/’
+*.remote_login_passwordfile=’exclusive’
+*.STANDBY_FILE_MANAGEMENT=’AUTO’
+*.fal_client=’MPPBSDR’
+*.fal_server=’MPPBSDB’
+*.sec_case_sensitive_logon=FALSE
+======================================
+
+step 7:- Take backup of production database (DC)
+
+$ rman target=/
+
+RMAN> BACKUP DATABASE PLUS ARCHIVELOG;
+
+( creation of standby controlfile is optional, we can create it from backup pieces also)
+ALTER DATABASE CREATE STANDBY CONTROLFILE AS '/tmp/MPPWSDR.ctl';
+
+
+
+step 8:- 
+
+create password file on one node of production database and move it to 2nd node and DR site also.
+
+
+orapwd file=$ORACLE_HOME/dbs/orapwMPPBSDB1 ignorecase=y  force=y
+
+
+=== Create directory on DR site=====
+
+/oracle/product/admin/MPPWSDR/adump
+
+step 9:-  Add server ip/hostname in both DC and DR (/etc/hosts)
+
+DR
+#Public Network eth0
+10.88.11.21     mcslin-mum-air-dr-ptrandb1.mcsl.in      mcslin-mum-air-dr-ptrandb1
+
+#Virtual Network
+10.88.11.23     mcslin-mum-air-dr-ptrandb1-vip.mcsl.in      mcslin-mum-air-dr-ptrandb1-vip
+
+
+DC 
+
+#Public network A$eth0)
+10.201.13.21    mcslin-del-okh-dc-ptrandb1.mcsl.in      mcslin-del-okh-dc-ptrandb1
+10.201.13.22    mcslin-del-okh-dc-ptrandb2.mcsl.in      mcslin-del-okh-dc-ptrandb2
+
+#Public Virtual IP (VIP Addresses) A$eth0:1)
+10.201.13.23    mcslin-del-okh-dc-ptrandb1-vip.mcsl.in  mcslin-del-okh-dc-ptrandb1-vip
+10.201.13.24    mcslin-del-okh-dc-ptrandb2-vip.mcsl.in  mcslin-del-okh-dc-ptrandb2-vip
+#Public network A$eth0)
+10.201.13.21    mcslin-del-okh-dc-ptrandb1.mcsl.in      mcslin-del-okh-dc-ptrandb1
+10.201.13.22    mcslin-del-okh-dc-ptrandb2.mcsl.in      mcslin-del-okh-dc-ptrandb2
+
+#Public Virtual IP (VIP Addresses) A$eth0:1)
+10.201.13.23    mcslin-del-okh-dc-ptrandb1-vip.mcsl.in  mcslin-del-okh-dc-ptrandb1-vip
+10.201.13.24    mcslin-del-okh-dc-ptrandb2-vip.mcsl.in  mcslin-del-okh-dc-ptrandb2-vip
+
+
+step 10:- update tnsnames.ora with respective services name 
+
+
+MPPWSDB =
+  (DESCRIPTION = (ADDRESS_LIST =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = ptrandb-scan.mcsl.in)(PORT = 1526))
+    )
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SERVICE_NAME = MPPWSDB.mcsl.in)
+    )
+  )
+
+MPPWSDR =
+  (DESCRIPTION = (ADDRESS_LIST =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = ptrandr-scan.mcsl.in)(PORT = 1526))
+    )
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SERVICE_NAME = MPPWSDR.mcsl.in)
+    )
+  )
+
+step 11:- 
+  Move database backup from production to DR side
+  Move pfile for DR database (created on step 4)
+  move standby controlfile 
+  oracle@10.88.11.21:/migration/backup_raj/.
+  
+step 12:- 
+
+(i) setup the environment variable on DR side for DR database
+(ii) startup nomount (pfile)
+create directory structure for adump
+/oracle/product/admin/MPPWSDR/adump
+
+step 13:- 
+(i) connect to RMAN target /
+(ii) Retore contorl file from backup pices
+
+restore standby controlfile from  '/migration/backup_raj/ncsnf0_TAG20140806T173759_0.7378.854905105'
+  
+(iii) Stratup mount
+(iv) catalog backup pieces 
+catalog start with '/migration/backup_raj/'
+(v) restore database
+
+(Vi) alter database open read only
+
+select name,open_mode,log_mode,controlfile_type,database_role from v$database;
+
+vii) Create spfile from pfile
+
+CREATE SPFILE='+DATA/MPPWSDR/spfileMPPWSDR.ora' from pfile;
+
+viii) starup nomount 
+
+SQL> startup nomount
+ORA-32004: obsolete or deprecated parameter(s) specified for RDBMS instance
+ORACLE instance started.
+
+Total System Global Area 3741306880 bytes
+Fixed Size                  2258800 bytes
+Variable Size            1241516176 bytes
+Database Buffers         2483027968 bytes
+Redo Buffers               14503936 bytes
+
+ix) Mount standby database
+SQL> alter database mount standby database;
+
+Database altered.
+select name,open_mode,log_mode,controlfile_type,database_role from v$database;
+
+
+
+x) check tnsping from both DC and DR site:
+
+Xi)ALTER DATABASE RECOVER MANAGED STANDBY DATABASE  DISCONNECT FROM SESSION;
+
+select PROCESS, STATUS, GROUP#, THREAD# from v$managed_standby;
+
+
+srvctl add database -d MPPWSDR -o /oracle/product/11.2.0/db -c RACONENODE -i MPPWSDR -e mcslin-mum-air-dr-ptrandb1.mcsl.in -r PHYSICAL_STANDBY
+
+
+CONFIGURE CHANNEL DEVICE TYPE DISK FORMAT   '/rmanbkp_crm/prdcrmbkp/databasebkp/PRODCRMBKP_%s_%D_%M_%Y'; 
+3:02:54 PM: Amits Singh: http://shivanandarao-oracle.com/2012/03/19/how-to-setup-active-dataguard-in-oracle-11g/ 
+
+
+
+SQL> select max(sequence#) from v$archived_log where applied='YES';
+
+MAX(SEQUENCE#)
+--------------
+           207
+
+SQL> alter database recover managed standby database cancel;
+
+Database altered.
+
+SQL> alter database open;
+
+Database altered.
+
+SQL> select status,instance_name,database_role,open_mode from v$database,v$instance;
+
+STATUS       INSTANCE_NAME    DATABASE_ROLE    OPEN_MODE
+------------ ---------------- ---------------- --------------------
+OPEN         MPPBDDR          PHYSICAL STANDBY READ ONLY
+
+SQL> alter database recover managed standby database disconnect from session;
+
+Database altered.
+
+SQL> select status,instance_name,database_role,open_mode from v$database,v$instance;
+
+STATUS       INSTANCE_NAME    DATABASE_ROLE    OPEN_MODE
+------------ ---------------- ---------------- --------------------
+OPEN         MPPBDDR          PHYSICAL STANDBY READ ONLY WITH APPLY
+
+
+select status, error from v$archive_dest where dest_id=2 ;
+select status, error from v$archive_dest where dest_id=2;
+
+alter database recover managed standby database using current logfile disconnect from session ;
